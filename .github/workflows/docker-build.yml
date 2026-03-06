@@ -18,17 +18,33 @@ jobs:
           username: ${{ secrets.ALIYUN_REGISTRY_USER }}
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
-      # 关键步骤：在构建前动态生成 Dockerfile
+      # 动态生成包含了 SDK 预安装的 Dockerfile
       - name: Create Dockerfile
         run: |
           cat <<EOF > Dockerfile
           FROM node:18-slim
+          
+          # 安装必要的编译工具以支持 npm 依赖安装
           RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+          
           WORKDIR /app
+          
+          # 全局安装 OpenClaw 主程序
           RUN npm install -g openclaw
-          RUN npm install -g @larksuiteoapi/node-sdk
+          
+          # 关键步骤：在正确的插件目录下预安装飞书 SDK
+          # 确保 OpenClaw 启动时能够直接在 extensions/feishu 目录找到 node_modules
+          RUN mkdir -p /app/extensions/feishu && \
+              cd /app/extensions/feishu && \
+              npm init -y && \
+              npm install @larksuiteoapi/node-sdk
+          
+          # 显式指定插件加载路径，避免路径模糊
+          ENV OPENCLAW_PLUGINS_DIR=/app/extensions
           ENV NODE_ENV=production
+          
           EXPOSE 18789
+          
           CMD ["openclaw", "start"]
           EOF
 
@@ -37,4 +53,5 @@ jobs:
         with:
           context: .
           push: true
+          # 确保构建出的镜像覆盖旧镜像
           tags: ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAME_SPACE }}/openclaw:latest

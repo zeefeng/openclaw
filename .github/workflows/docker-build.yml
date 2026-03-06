@@ -108,7 +108,7 @@ jobs:
           cache-to: type=registry,ref=${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAME_SPACE }}/openclaw:buildcache,mode=max
           # 减小镜像体积
           slim: true
-          # 构建时输出详细日志
+          # 构建时输出详细日志（修复：build-args改为列表格式）
           build-args:
             - NODE_ENV=production
 

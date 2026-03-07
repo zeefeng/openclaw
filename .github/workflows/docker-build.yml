@@ -18,34 +18,32 @@ jobs:
           username: ${{ secrets.ALIYUN_REGISTRY_USER }}
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
-      # 在构建服务器上动态生成 Dockerfile，确保 SDK 被打入镜像
-      - name: Generate Inline Dockerfile
+      - name: Create Dockerfile
         run: |
-          cat <<EOF > Dockerfile.feishu
+          cat <<EOF > Dockerfile
           FROM node:18-slim
           
-          # 1. 安装系统级依赖（npm 编译一些包时需要）
+          # 安装构建工具
           RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
           
           WORKDIR /app
           
-          # 2. 全局安装 OpenClaw
+          # 全局安装主程序，这样它就在系统路径中了
           RUN npm install -g openclaw
           
-          # 3. 预创建飞书插件目录并安装 SDK
-          # 这一步在 GitHub 端完成，不会消耗你阿里云服务器的内存
+          # 预安装飞书组件
           RUN mkdir -p /app/extensions/feishu && \
               cd /app/extensions/feishu && \
               npm init -y && \
               npm install @larksuiteoapi/node-sdk
           
-          # 4. 配置环境变量，确保插件加载路径正确
+          # 核心修正：设置环境变量指向我们创建的插件目录
           ENV OPENCLAW_PLUGINS_DIR=/app/extensions
           ENV NODE_ENV=production
           
           EXPOSE 18789
           
-          # 5. 启动命令
+          # 修正启动命令：直接运行全局命令 openclaw
           CMD ["openclaw", "start"]
           EOF
 
@@ -53,7 +51,5 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          # 使用我们刚刚生成的临时 Dockerfile
-          file: ./Dockerfile.feishu
           push: true
           tags: ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAME_SPACE }}/openclaw:latest

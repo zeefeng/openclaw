@@ -14,6 +14,7 @@ jobs:
       - name: Login to Aliyun ACR
         uses: docker/login-action@v3
         with:
+          # 注意：这里引用的必须和你后台 Repository secrets 里的名字一模一样
           registry: ${{ secrets.ALIYUN_REGISTRY }}
           username: ${{ secrets.ALIYUN_REGISTRY_USER }}
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
@@ -22,28 +23,16 @@ jobs:
         run: |
           cat <<EOF > Dockerfile
           FROM node:18-slim
-          
-          # 安装构建工具
           RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
-          
           WORKDIR /app
-          
-          # 1. 在本地安装 openclaw
           RUN npm init -y && npm install openclaw
-          
-          # 2. 预安装飞书组件
           RUN mkdir -p /app/extensions/feishu && \
               cd /app/extensions/feishu && \
               npm init -y && \
               npm install @larksuiteoapi/node-sdk
-          
-          # 3. 设置环境变量
           ENV OPENCLAW_PLUGINS_DIR=/app/extensions
           ENV NODE_ENV=production
-          
           EXPOSE 18789
-          
-          # 4. 彻底清空 Entrypoint，直接使用 npx 启动
           ENTRYPOINT []
           CMD ["npx", "openclaw", "start"]
           EOF

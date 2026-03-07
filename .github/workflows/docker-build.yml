@@ -1,27 +1,15 @@
-name: Build and Push OpenClaw to Aliyun ACR
+name: Build and Push to Aliyun
 
-# 触发条件：main分支push，或手动触发
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch: # 新增：支持手动触发构建
 
 jobs:
-  build-and-push:
+  build:
     runs-on: ubuntu-latest
-    # 构建失败时自动重试1次
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [18.x]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1 # 浅克隆，加速构建
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3 # 新增：启用Buildx，支持多平台构建（可选）
 
       - name: Login to Aliyun ACR
         uses: docker/login-action@v3
@@ -29,90 +17,43 @@ jobs:
           registry: ${{ secrets.ALIYUN_REGISTRY }}
           username: ${{ secrets.ALIYUN_REGISTRY_USER }}
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
-        # 登录失败时重试
-        continue-on-error: false
-        timeout-minutes: 5
 
-      # 优化后的Dockerfile生成步骤（解决飞书SDK适配、镜像体积、运行稳定性问题）
-      - name: Create Optimized Dockerfile
+      # 在构建服务器上动态生成 Dockerfile，确保 SDK 被打入镜像
+      - name: Generate Inline Dockerfile
         run: |
-          cat <<EOF > Dockerfile
-          # 阶段1：构建依赖（减小最终镜像体积）
-          FROM node:18-slim AS builder
+          cat <<EOF > Dockerfile.feishu
+          FROM node:18-slim
           
-          # 设置国内镜像源，加速依赖安装
-          RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-              apt-get update && apt-get install -y --no-install-recommends python3 make g++ && \
-              rm -rf /var/lib/apt/lists/*
-          
-          # 设置npm国内源
-          RUN npm config set registry https://registry.npmmirror.com
+          # 1. 安装系统级依赖（npm 编译一些包时需要）
+          RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
           
           WORKDIR /app
           
-          # 先安装OpenClaw核心包
-          RUN npm install -g openclaw --production
+          # 2. 全局安装 OpenClaw
+          RUN npm install -g openclaw
           
-          # 创建飞书插件目录并安装SDK（指定版本避免兼容性问题）
+          # 3. 预创建飞书插件目录并安装 SDK
+          # 这一步在 GitHub 端完成，不会消耗你阿里云服务器的内存
           RUN mkdir -p /app/extensions/feishu && \
               cd /app/extensions/feishu && \
               npm init -y && \
-              npm install @larksuiteoapi/node-sdk@latest --production && \
-              # 清理npm缓存，减小镜像体积
-              npm cache clean --force
+              npm install @larksuiteoapi/node-sdk
           
-          # 阶段2：运行镜像（轻量）
-          FROM node:18-slim
+          # 4. 配置环境变量，确保插件加载路径正确
+          ENV OPENCLAW_PLUGINS_DIR=/app/extensions
+          ENV NODE_ENV=production
           
-          # 设置时区为上海（适配飞书时间相关接口）
-          RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
-              echo "Asia/Shanghai" > /etc/timezone
-          
-          # 复制构建阶段的依赖和程序
-          COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
-          COPY --from=builder /app/extensions /app/extensions
-          
-          # 创建软链接，让openclaw命令全局可用
-          RUN ln -s /usr/local/lib/node_modules/openclaw/bin/cli.js /usr/local/bin/openclaw
-          
-          # 配置OpenClaw环境变量（飞书适配关键）
-          ENV OPENCLAW_PLUGINS_DIR=/app/extensions \
-              NODE_ENV=production \
-              # 飞书SDK环境变量（可选，指定飞书接口环境）
-              LARK_SUITE_ENV=prod \
-              # 增加Node内存限制，避免OOM
-              NODE_OPTIONS=--max-old-space-size=2048
-          
-          # 工作目录
-          WORKDIR /app
-          
-          # 暴露OpenClaw默认端口（确认端口与OpenClaw配置一致）
           EXPOSE 18789
           
-          # 健康检查（新增：监控容器运行状态）
-          HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-              CMD node -e "require('http').get('http://127.0.0.1:18789/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => { process.exit(1) })"
-          
-          # 启动命令（增加日志输出，便于排查问题）
-          CMD ["sh", "-c", "openclaw start --log-level=info"]
+          # 5. 启动命令
+          CMD ["openclaw", "start"]
           EOF
 
-      - name: Build and Push to ACR
+      - name: Build and Push
         uses: docker/build-push-action@v5
         with:
           context: .
+          # 使用我们刚刚生成的临时 Dockerfile
+          file: ./Dockerfile.feishu
           push: true
           tags: ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAME_SPACE }}/openclaw:latest
-          # 优化构建参数
-          cache-from: type=registry,ref=${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAME_SPACE }}/openclaw:buildcache
-          cache-to: type=registry,ref=${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAME_SPACE }}/openclaw:buildcache,mode=max
-          # 减小镜像体积
-          slim: true
-          # 构建时输出详细日志（修复：build-args改为列表格式）
-          build-args:
-            - NODE_ENV=production
-
-      # 新增：构建后登出ACR（安全最佳实践）
-      - name: Logout from Aliyun ACR
-        if: always() # 无论构建成功/失败都执行
-        run: docker logout ${{ secrets.ALIYUN_REGISTRY }}

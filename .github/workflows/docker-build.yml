@@ -14,22 +14,29 @@ jobs:
       - name: Login to Aliyun ACR
         uses: docker/login-action@v3
         with:
+          # 核心修复：这里引用的名字必须和你后台 Repository secrets 里的名字一模一样
           registry: ${{ secrets.ALIYUN_REGISTRY }}
           username: ${{ secrets.ALIYUN_REGISTRY_USER }}
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
-      # 关键步骤：在构建前动态生成 Dockerfile
       - name: Create Dockerfile
         run: |
           cat <<EOF > Dockerfile
           FROM node:18-slim
           RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
           WORKDIR /app
-          RUN npm install -g openclaw
-          RUN npm install -g @larksuiteoapi/node-sdk
+          # 在本地安装 openclaw，确保路径稳定
+          RUN npm init -y && npm install openclaw
+          # 预安装飞书组件
+          RUN mkdir -p /app/extensions/feishu && \
+              cd /app/extensions/feishu && \
+              npm init -y && \
+              npm install @larksuiteoapi/node-sdk
+          ENV OPENCLAW_PLUGINS_DIR=/app/extensions
           ENV NODE_ENV=production
           EXPOSE 18789
-          CMD ["openclaw", "start"]
+          ENTRYPOINT []
+          CMD ["npx", "openclaw", "start"]
           EOF
 
       - name: Build and Push
